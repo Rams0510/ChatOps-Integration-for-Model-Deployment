@@ -73,10 +73,12 @@ jobs:
           cache-from: type=registry,ref=${{ secrets.DOCKER_USERNAME }}/ml-model:latest
           cache-to: type=inline
 
-  # ── Job 3: Deploy to Cloud Run from Docker Hub ───────────────────────────────
+  # ── Job 3: Deploy to Cloud Run ───────────────────────────────────────────────
   deploy:
     needs: build-and-push
     runs-on: ubuntu-latest
+    outputs:
+      url: ${{ steps.deploy.outputs.url }}
     steps:
       - name: Authenticate to GCP
         uses: google-github-actions/auth@v2
@@ -86,7 +88,7 @@ jobs:
       - name: Set up Cloud SDK
         uses: google-github-actions/setup-gcloud@v2
 
-      - name: Deploy to Cloud Run from Docker Hub
+      - name: Deploy to Cloud Run
         id: deploy
         run: |
           gcloud run deploy ${{ env.SERVICE_NAME }} \
@@ -97,7 +99,7 @@ jobs:
             --port 8000 \
             --memory 512Mi \
             --cpu 1 \
-            --min-instances 0 \
+            --min-instances 1 \
             --max-instances 10 \
             --concurrency 80 \
             --quiet
@@ -109,10 +111,131 @@ jobs:
           echo "url=$URL" >> $GITHUB_OUTPUT
           echo "Live URL: $URL"
 
-      - name: Show deployment summary
-        run: |
-          echo "## Deployment Summary" >> $GITHUB_STEP_SUMMARY
-          echo "- **Environment:** ${{ github.event.inputs.environment || 'dev' }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Image:** docker.io/${{ secrets.DOCKER_USERNAME }}/ml-model:${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **URL:** ${{ steps.deploy.outputs.url }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Commit:** ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+  # ── Job 4: Notify Slack ──────────────────────────────────────────────────────
+  notify:
+    needs: deploy
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Notify Slack — success
+        if: needs.deploy.result == 'success'
+        uses: slackapi/slack-github-action@v1
+        with:
+          payload: |
+            {
+              "blocks": [
+                {
+                  "type": "header",
+                  "text": {
+                    "type": "plain_text",
+                    "text": "✅ Deployment Successful"
+                  }
+                },
+                {
+                  "type": "section",
+                  "fields": [
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Service:*\n`ml-model`"
+                    },
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Environment:*\n`${{ github.event.inputs.environment || 'dev' }}`"
+                    },
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Version:*\n`${{ github.sha }}`"
+                    },
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Triggered by:*\n`${{ github.actor }}`"
+                    }
+                  ]
+                },
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "*Live URL:* ${{ needs.deploy.outputs.url }}"
+                  }
+                },
+                {
+                  "type": "actions",
+                  "elements": [
+                    {
+                      "type": "button",
+                      "text": {
+                        "type": "plain_text",
+                        "text": "View Run"
+                      },
+                      "url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+                    },
+                    {
+                      "type": "button",
+                      "text": {
+                        "type": "plain_text",
+                        "text": "Open API Docs"
+                      },
+                      "url": "${{ needs.deploy.outputs.url }}/docs"
+                    }
+                  ]
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
+
+      - name: Notify Slack — failure
+        if: needs.deploy.result == 'failure'
+        uses: slackapi/slack-github-action@v1
+        with:
+          payload: |
+            {
+              "blocks": [
+                {
+                  "type": "header",
+                  "text": {
+                    "type": "plain_text",
+                    "text": "❌ Deployment Failed"
+                  }
+                },
+                {
+                  "type": "section",
+                  "fields": [
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Service:*\n`ml-model`"
+                    },
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Triggered by:*\n`${{ github.actor }}`"
+                    },
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Commit:*\n`${{ github.sha }}`"
+                    },
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Branch:*\n`${{ github.ref_name }}`"
+                    }
+                  ]
+                },
+                {
+                  "type": "actions",
+                  "elements": [
+                    {
+                      "type": "button",
+                      "text": {
+                        "type": "plain_text",
+                        "text": "View Failed Run"
+                      },
+                      "url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+                    }
+                  ]
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
