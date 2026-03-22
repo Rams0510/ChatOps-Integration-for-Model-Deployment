@@ -11,6 +11,11 @@ on:
         options: [dev, staging, prod]
         default: dev
 
+env:
+  PROJECT_ID: ml-deploy-491017
+  REGION: us-central1
+  SERVICE_NAME: ml-model
+
 jobs:
   # ── Job 1: Train and validate the model ─────────────────────────────────────
   train:
@@ -43,7 +48,7 @@ jobs:
     needs: train
     runs-on: ubuntu-latest
     outputs:
-      image_tag: ${{ steps.meta.outputs.version }}
+      image: ${{ steps.image.outputs.image }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -60,29 +65,64 @@ jobs:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_TOKEN }}
 
-      - name: Extract metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ secrets.DOCKER_USERNAME }}/ml-model
-          tags: |
-            type=raw,value=latest
-            type=sha,prefix=sha-
-
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
         with:
           context: .
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          tags: |
+            ${{ secrets.DOCKER_USERNAME }}/ml-model:latest
+            ${{ secrets.DOCKER_USERNAME }}/ml-model:${{ github.sha }}
           cache-from: type=registry,ref=${{ secrets.DOCKER_USERNAME }}/ml-model:latest
           cache-to: type=inline
 
-      - name: Summary
+      - name: Set image output
+        id: image
+        run: echo "image=${{ secrets.DOCKER_USERNAME }}/ml-model:${{ github.sha }}" >> $GITHUB_OUTPUT
+
+  # ── Job 3: Deploy to GCP Cloud Run ──────────────────────────────────────────
+  deploy:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    steps:
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for GCR
+        run: gcloud auth configure-docker --quiet
+
+      - name: Pull image from Docker Hub and push to GCR
         run: |
-          echo "## Build Summary" >> $GITHUB_STEP_SUMMARY
-          echo "- **Image:** ${{ secrets.DOCKER_USERNAME }}/ml-model" >> $GITHUB_STEP_SUMMARY
-          echo "- **Tags:** latest, sha-${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+          docker pull ${{ needs.build-and-push.outputs.image }}
+          docker tag ${{ needs.build-and-push.outputs.image }} gcr.io/${{ env.PROJECT_ID }}/${{ env.SERVICE_NAME }}:${{ github.sha }}
+          docker push gcr.io/${{ env.PROJECT_ID }}/${{ env.SERVICE_NAME }}:${{ github.sha }}
+
+      - name: Deploy to Cloud Run
+        id: deploy
+        uses: google-github-actions/deploy-cloudrun@v2
+        with:
+          service: ${{ env.SERVICE_NAME }}
+          image: gcr.io/${{ env.PROJECT_ID }}/${{ env.SERVICE_NAME }}:${{ github.sha }}
+          region: ${{ env.REGION }}
+          flags: >-
+            --allow-unauthenticated
+            --port=8000
+            --memory=512Mi
+            --cpu=1
+            --min-instances=0
+            --max-instances=10
+            --concurrency=80
+
+      - name: Show deployed URL
+        run: |
+          echo "## Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "- **Environment:** ${{ github.event.inputs.environment || 'dev' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Service:** ${{ env.SERVICE_NAME }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Image:** gcr.io/${{ env.PROJECT_ID }}/${{ env.SERVICE_NAME }}:${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **URL:** ${{ steps.deploy.outputs.url }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Commit:** ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Triggered by:** ${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
