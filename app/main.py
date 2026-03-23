@@ -10,7 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, field_validator
 from contextlib import asynccontextmanager
 
-MODEL_PATH = os.getenv("MODEL_PATH", "app/model.pkl")
+MODEL_PATH = os.getenv("MODEL_PATH", "model.pkl")
 ml = {}
 
 @asynccontextmanager
