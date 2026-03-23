@@ -156,7 +156,7 @@ jobs:
                   "type": "section",
                   "text": {
                     "type": "mrkdwn",
-                    "text": "*Live URL:* ${{ needs.deploy.outputs.url }}"
+                    "text": "*Live URL:* https://ml-model-380791748453.us-central1.run.app"
                   }
                 },
                 {
@@ -176,7 +176,7 @@ jobs:
                         "type": "plain_text",
                         "text": "Open API Docs"
                       },
-                      "url": "${{ needs.deploy.outputs.url }}/docs"
+                      "url": "https://ml-model-380791748453.us-central1.run.app/docs"
                     }
                   ]
                 }
