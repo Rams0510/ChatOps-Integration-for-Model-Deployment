@@ -1,43 +1,59 @@
 """
-Phase 1 — Step 1: Train and save the ML model.
-Run this ONCE locally before building Docker:
-    python train_model.py
+Train and save the House Price Prediction model.
+Uses the California Housing dataset — a real-world dataset with 20,640 samples.
+Run once: python train_model.py
 """
 import joblib
 import numpy as np
-from sklearn.datasets import load_iris
-from sklearn.ensemble import RandomForestClassifier
+from sklearn.datasets import fetch_california_housing
+from sklearn.ensemble import GradientBoostingRegressor
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import accuracy_score, classification_report
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import mean_absolute_error, r2_score
+from sklearn.pipeline import Pipeline
 
 def train():
-    print("Loading dataset...")
-    X, y = load_iris(return_X_y=True)
-    target_names = ["setosa", "versicolor", "virginica"]
+    print("Loading California Housing dataset (20,640 real samples)...")
+    data = fetch_california_housing()
+    X, y = data.data, data.target  # y is in $100,000s
+
+    print(f"Dataset: {X.shape[0]} houses, {X.shape[1]} features")
+    print(f"Price range: ${y.min()*100:.0f}k — ${y.max()*100:.0f}k")
 
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.2, random_state=42
     )
 
-    print("Training RandomForestClassifier...")
-    model = RandomForestClassifier(n_estimators=100, random_state=42)
-    model.fit(X_train, y_train)
+    print("\nTraining Gradient Boosting Regressor...")
+    pipeline = Pipeline([
+        ("scaler", StandardScaler()),
+        ("model", GradientBoostingRegressor(
+            n_estimators=200,
+            learning_rate=0.1,
+            max_depth=4,
+            random_state=42,
+        ))
+    ])
+    pipeline.fit(X_train, y_train)
 
-    preds = model.predict(X_test)
-    accuracy = accuracy_score(y_test, preds)
+    preds = pipeline.predict(X_test)
+    mae = mean_absolute_error(y_test, preds)
+    r2  = r2_score(y_test, preds)
 
-    print(f"\nTest accuracy: {accuracy:.3f}")
-    print("\nClassification report:")
-    print(classification_report(y_test, preds, target_names=target_names))
+    print(f"\nTest MAE:  ${mae*100:.2f}k")
+    print(f"Test R²:   {r2:.3f}")
 
-    if accuracy < 0.90:
-        raise ValueError(
-            f"Model accuracy {accuracy:.3f} is below threshold 0.90. Not saving."
-        )
+    if r2 < 0.75:
+        raise ValueError(f"R² {r2:.3f} too low — not saving model.")
 
-    joblib.dump(model, "app/model.pkl")
-    print("Model saved to app/model.pkl")
-
+    # Save model + feature names
+    joblib.dump({
+        "pipeline": pipeline,
+        "feature_names": data.feature_names,
+        "target_scale": 100_000,  # multiply predictions by this for USD
+    }, "app/model.pkl")
+    print("\nModel saved to app/model.pkl")
+    print(f"Ready to predict house prices with R²={r2:.3f}")
 
 if __name__ == "__main__":
     train()
